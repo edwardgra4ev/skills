@@ -1,6 +1,10 @@
 # Local tasks and interview drafts for this workspace
 /docs/tasks/
 
+# Local documentation and validation reports
+/docs/README.md
+/docs/portability-check.md
+
 # Local editor and agent state
 /.agents/
 /.codex/
