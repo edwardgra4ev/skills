@@ -1,0 +1,25 @@
+# Local tasks and interview drafts for this workspace
+/docs/tasks/
+
+# Local editor and agent state
+/.agents/
+/.codex/
+/.codegraph/
+/.vscode/
+/.idea/
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+
+# Python caches and environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
