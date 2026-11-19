@@ -2,6 +2,7 @@
 """Install bundled skills into a project or a specified skills directory."""
 
 import argparse
+import difflib
 import hashlib
 import re
 import shutil
@@ -44,7 +45,79 @@ def manifest(root):
     return result
 
 
-def install(skills, names, destination):
+def show_changes(source, target, old, new):
+    print(f"\nОтличия для {target.name}: установленная версия → версия из набора")
+    for name in sorted(old.keys() | new.keys()):
+        if name in old and name in new and old[name] == new[name]:
+            continue
+        status = "Добавлен" if name not in old else "Удалён" if name not in new else "Изменён"
+        print(f"  {status}: {name}")
+        before, after = target / name, source / name
+        try:
+            before_text = before.read_text(encoding="utf-8") if before.is_file() else ""
+            after_text = after.read_text(encoding="utf-8") if after.is_file() else ""
+            if "\0" in before_text or "\0" in after_text:
+                raise UnicodeError()
+        except UnicodeError:
+            print("    Двоичный файл или текст не в UTF-8; содержимое не показано.")
+            continue
+        for line in difflib.unified_diff(
+            before_text.splitlines(), after_text.splitlines(),
+            fromfile=f"установлено/{name}", tofile=f"новая-версия/{name}", lineterm="",
+        ):
+            print(line)
+
+
+def confirm_update(name):
+    while True:
+        answer = input(f"Заменить {name} с резервной копией? [да/Нет]: ").strip().lower()
+        if answer in {"да", "д", "yes", "y"}:
+            return True
+        if answer in {"", "нет", "н", "no", "n", "отмена", "q"}:
+            return False
+        print("Введите 'да' для обновления или 'нет' для отмены установки.")
+
+
+def publish_skill(source, target, old):
+    destination = target.parent
+    with tempfile.TemporaryDirectory(prefix=".skill-install-", dir=destination) as tmp:
+        staged = Path(tmp) / source.name
+        shutil.copytree(source, staged)
+        if manifest(staged) != manifest(source):
+            raise ValueError(f"Не удалось проверить копию навыка: {source.name}")
+        if old is None:
+            if target.exists() or target.is_symlink():
+                raise ValueError(f"Destination appeared during installation: {target}")
+            staged.rename(target)
+            print(f"Установлен: {target}")
+            return
+        # Recheck after the dialog and staging, before moving the installed version.
+        if target.is_symlink() or not target.is_dir() or manifest(target) != old:
+            raise ValueError(f"Навык изменился во время установки: {target}. Повторите сравнение.")
+        backup_root = destination.parent / f"{destination.name}-backups"
+        if backup_root.is_symlink():
+            raise ValueError(f"Каталог резервных копий является символической ссылкой: {backup_root}")
+        backup_root.mkdir(parents=True, exist_ok=True)
+        backup_dir = Path(tempfile.mkdtemp(prefix=f"{target.name}-", dir=backup_root))
+        backup = backup_dir / target.name
+        # Verify both move endpoints remain inside their intended directories.
+        if target.resolve().parent != destination.resolve() or backup.resolve().parent.parent != backup_root.resolve():
+            raise ValueError("Путь замены выходит за пределы каталога установки или резервных копий.")
+        print(f"Резервная копия: {backup}", flush=True)
+        target.rename(backup)
+        try:
+            staged.rename(target)
+        except BaseException:
+            if not target.exists() and not target.is_symlink():
+                backup.rename(target)
+                print(f"Восстановлена предыдущая версия: {target}", file=sys.stderr)
+            else:
+                print(f"Предыдущая версия сохранена в: {backup}", file=sys.stderr)
+            raise
+        print(f"Обновлён: {target}")
+
+
+def install(skills, names, destination, *, update=False, interactive=False):
     pending = []
     unchanged = []
     # Validate the entire selection before copying any skill.
@@ -55,27 +128,36 @@ def install(skills, names, destination):
         if target.is_symlink():
             raise ValueError(f"Destination is a symbolic link: {target}")
         if target.exists():
-            if not target.is_dir() or manifest(target) != source_files:
-                raise ValueError(
-                    f"Existing skill differs: {target}\n"
-                    "Compare it with the source and move the old directory to a "
-                    "backup location before retrying. No skills were installed."
-                )
-            unchanged.append(target)
+            if not target.is_dir():
+                raise ValueError(f"Путь навыка занят файлом: {target}")
+            old = manifest(target)
+            if old != source_files:
+                pending.append((source, target, old))
+            else:
+                unchanged.append(target)
         else:
-            pending.append((source, target))
+            pending.append((source, target, None))
+
+    updates = [(source, target, old) for source, target, old in pending if old is not None]
+    for source, target, old in updates:
+        show_changes(source, target, old, manifest(source))
+    if updates:
+        print(f"\nРезервные копии будут сохранены в: {destination.parent / (destination.name + '-backups')}")
+        if interactive:
+            for _, target, _ in updates:
+                if not confirm_update(target.name):
+                    print("Установка отменена. Навыки не изменены.")
+                    return
+        elif not update:
+            raise ValueError(
+                "Установленные навыки отличаются. Для замены с резервной копией "
+                "повторите команду с --update или запустите без аргументов. Навыки не изменены."
+            )
 
     if pending:
         destination.mkdir(parents=True, exist_ok=True)
-        for source, target in pending:
-            # Publish only a complete copy; a copy failure leaves no partial skill.
-            with tempfile.TemporaryDirectory(prefix=".skill-install-", dir=destination) as tmp:
-                staged = Path(tmp) / source.name
-                shutil.copytree(source, staged)
-                if target.exists() or target.is_symlink():
-                    raise ValueError(f"Destination appeared during installation: {target}")
-                staged.rename(target)
-            print(f"Установлен: {target}")
+        for source, target, old in pending:
+            publish_skill(source, target, old)
     for target in unchanged:
         print(f"Уже установлен: {target}")
 
@@ -154,6 +236,7 @@ def main(argv=None):
     target = parser.add_mutually_exclusive_group()
     target.add_argument("--project", type=Path, help="Existing project; installs into .agents/skills")
     target.add_argument("--dest", type=Path, help="Explicit skills directory for another agent environment")
+    parser.add_argument("--update", action="store_true", help="Заменить отличающиеся навыки с резервной копией без вопросов")
     args = parser.parse_args(argv)
 
     try:
@@ -165,8 +248,8 @@ def main(argv=None):
                 return 0
             args.skill, args.project = choice
         if args.list:
-            if args.project or args.dest:
-                parser.error("--list does not take --project or --dest")
+            if args.project or args.dest or args.update:
+                parser.error("--list does not take --project, --dest or --update")
             for name, source in skills.items():
                 print(f"{name}\t{source.relative_to(SKILLS_ROOT.parent).as_posix()}")
             return 0
@@ -188,7 +271,7 @@ def main(argv=None):
         resolved = destination.resolve()
         if resolved == source_root or source_root in resolved.parents:
             raise ValueError("Choose a destination outside the source skills directory.")
-        install(skills, names, destination)
+        install(skills, names, destination, update=args.update, interactive=not argv)
         return 0
     except (EOFError, KeyboardInterrupt):
         print("\nУстановка прервана.", file=sys.stderr)

@@ -1,12 +1,17 @@
 import subprocess
+import importlib.util
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "install.py"
+SPEC = importlib.util.spec_from_file_location("installer", SCRIPT)
+installer = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(installer)
 
 
 class InstallTests(unittest.TestCase):
@@ -51,7 +56,7 @@ class InstallTests(unittest.TestCase):
         local.write_text("local modifications", encoding="utf-8")
         result = self.run_install("--all", "--project", self.project)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Existing skill differs", result.stderr)
+        self.assertIn("--update", result.stderr)
         self.assertEqual(local.read_text(encoding="utf-8"), "local modifications")
         self.assertFalse((self.destination / "feature-trace").exists())
 
@@ -125,6 +130,89 @@ class InstallTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(local.read_text(encoding="utf-8"), "local modifications")
         self.assertFalse((self.destination / "feature-trace").exists())
+
+    def prepare_old_version(self):
+        target = self.destination / "feature-trace"
+        target.mkdir(parents=True)
+        (target / "SKILL.md").write_text("old local instructions\n", encoding="utf-8")
+        (target / "extra.bin").write_bytes(b"\x00\xff\x01")
+        (target / "empty").mkdir()
+        return target
+
+    def test_update_backs_up_entire_old_directory_and_shows_diff(self):
+        target = self.prepare_old_version()
+        original = installer.manifest(target)
+        result = self.run_install("--skill", "feature-trace", "--project", self.project, "--update")
+        self.assert_success(result)
+        self.assertIn("-old local instructions", result.stdout)
+        self.assertIn("+name: feature-trace", result.stdout)
+        self.assertIn("Удалён: extra.bin", result.stdout)
+        self.assertIn("Двоичный файл", result.stdout)
+        backups = list((self.destination.parent / "skills-backups").glob("*/feature-trace"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(installer.manifest(backups[0]), original)
+        source = ROOT / "skills" / "engineering" / "feature-trace"
+        self.assertEqual(installer.manifest(target), installer.manifest(source))
+        self.assert_success(self.run_install("--skill", "feature-trace", "--project", self.project, "--update"))
+        self.assertEqual(len(list(backups[0].parent.parent.iterdir())), 1)
+
+    def test_interactive_update_requires_yes(self):
+        target = self.prepare_old_version()
+        original = installer.manifest(target)
+        for response in ("нет", "", "отмена"):
+            result = self.run_install(input_text=f"all\n{self.project}\n{response}\n")
+            self.assert_success(result)
+            self.assertEqual(installer.manifest(target), original)
+            self.assertFalse((self.destination / "project-todo").exists())
+            self.assertFalse((self.destination.parent / "skills-backups").exists())
+        result = self.run_install(input_text=f"feature-trace\n{self.project}\nда\n")
+        self.assert_success(result)
+        self.assertIn("Обновлён:", result.stdout)
+        self.assertTrue(list((self.destination.parent / "skills-backups").glob("*/feature-trace")))
+
+    def test_custom_destination_keeps_separate_unique_backups(self):
+        target = self.prepare_old_version()
+        for text in ("first version", "second version"):
+            (target / "SKILL.md").write_text(text, encoding="utf-8")
+            self.assert_success(self.run_install("--skill", "feature-trace", "--dest", self.destination, "--update"))
+        contents = sorted(p.read_text(encoding="utf-8") for p in
+                          (self.destination.parent / "skills-backups").glob("*/feature-trace/SKILL.md"))
+        self.assertEqual(contents, ["first version", "second version"])
+
+    def test_failed_publish_restores_old_version(self):
+        target = self.prepare_old_version()
+        original = installer.manifest(target)
+        source = ROOT / "skills" / "engineering" / "feature-trace"
+        rename = Path.rename
+
+        def fail_publish(path, dest):
+            if path.parent.name.startswith(".skill-install-"):
+                raise OSError("simulated publish failure")
+            return rename(path, dest)
+
+        with mock.patch.object(Path, "rename", fail_publish):
+            with self.assertRaisesRegex(OSError, "simulated publish failure"):
+                installer.publish_skill(source, target, original)
+        self.assertEqual(installer.manifest(target), original)
+        self.assertFalse(list(self.destination.glob(".skill-install-*")))
+
+    def test_backup_failure_leaves_old_version_untouched(self):
+        target = self.prepare_old_version()
+        original = installer.manifest(target)
+        source = ROOT / "skills" / "engineering" / "feature-trace"
+        with mock.patch.object(Path, "rename", side_effect=PermissionError("backup denied")):
+            with self.assertRaises(PermissionError):
+                installer.publish_skill(source, target, original)
+        self.assertEqual(installer.manifest(target), original)
+
+    def test_changed_target_is_not_replaced_after_review(self):
+        target = self.prepare_old_version()
+        reviewed = installer.manifest(target)
+        (target / "SKILL.md").write_text("edited after review", encoding="utf-8")
+        source = ROOT / "skills" / "engineering" / "feature-trace"
+        with self.assertRaisesRegex(ValueError, "изменился"):
+            installer.publish_skill(source, target, reviewed)
+        self.assertEqual((target / "SKILL.md").read_text(encoding="utf-8"), "edited after review")
 
 
 if __name__ == "__main__":
