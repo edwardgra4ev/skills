@@ -7,6 +7,7 @@ import re
 import shutil
 import sys
 import tempfile
+import textwrap
 from pathlib import Path
 
 
@@ -74,22 +75,36 @@ def install(skills, names, destination):
                 if target.exists() or target.is_symlink():
                     raise ValueError(f"Destination appeared during installation: {target}")
                 staged.rename(target)
-            print(f"Installed: {target}")
+            print(f"Установлен: {target}")
     for target in unchanged:
-        print(f"Already up to date: {target}")
+        print(f"Уже установлен: {target}")
+
+
+def skill_description(source):
+    """Read the single-line description used by bundled SKILL.md files."""
+    content = (source / "SKILL.md").read_text(encoding="utf-8-sig")
+    header = re.match(r"\A---\n(.*?)\n---(?:\n|$)", content, re.DOTALL)
+    if header:
+        match = re.search(r"^description:[ \t]*(.+)$", header.group(1), re.MULTILINE)
+        if match:
+            return match.group(1).strip()
+    return "Описание отсутствует."
 
 
 def choose_interactively(skills):
     names = sorted(skills)
-    print("Select skills to install:")
+    print("Выберите навыки для установки:")
     for number, name in enumerate(names, start=1):
         print(f"  {number}. {name}")
-    print("Enter numbers or names separated by spaces/commas, 'all', or 'q' to cancel.")
+        print(textwrap.fill(skill_description(skills[name]), width=88,
+                            initial_indent="     ", subsequent_indent="     "))
+    print("Введите номера или имена через пробелы или запятые.")
+    print("'все' (all) — установить весь набор; 'отмена' (q) — выйти.")
     while True:
-        answer = input("Skills: ").strip()
-        if answer.lower() == "q":
+        answer = input("Навыки: ").strip()
+        if answer.lower() in {"q", "отмена"}:
             return None
-        if answer.lower() == "all":
+        if answer.lower() in {"all", "все", "всё"}:
             selected = names
             break
         tokens = re.split(r"[\s,]+", answer) if answer else []
@@ -105,14 +120,14 @@ def choose_interactively(skills):
             if selected:
                 selected = list(dict.fromkeys(selected))
                 break
-        print("Choose at least one valid skill, 'all', or 'q'.")
+        print("Выберите хотя бы один навык из списка, введите 'все' или 'отмена'.")
 
-    print(f"Selected: {', '.join(selected)}")
-    print("Enter an existing project directory (or 'q' to cancel).")
-    print(f"Relative paths start from: {Path.cwd()}")
+    print(f"Выбраны: {', '.join(selected)}")
+    print("Введите путь к существующему проекту или 'отмена' (q) для выхода.")
+    print(f"Относительные пути считаются от: {Path.cwd()}")
     while True:
-        answer = input("Project: ").strip()
-        if answer.lower() == "q":
+        answer = input("Путь к проекту: ").strip()
+        if answer.lower() in {"q", "отмена"}:
             return None
         if len(answer) >= 2 and answer[0] == answer[-1] and answer[0] in "\"'":
             answer = answer[1:-1]
@@ -123,7 +138,7 @@ def choose_interactively(skills):
                     return selected, project
             except (OSError, ValueError, RuntimeError):
                 pass
-        print("Project directory does not exist. Enter an existing directory.")
+        print("Каталог проекта не найден. Введите путь к существующему каталогу.")
 
 
 def main(argv=None):
@@ -146,7 +161,7 @@ def main(argv=None):
         if not argv:
             choice = choose_interactively(skills)
             if choice is None:
-                print("Installation cancelled.")
+                print("Установка отменена.")
                 return 0
             args.skill, args.project = choice
         if args.list:
@@ -176,7 +191,7 @@ def main(argv=None):
         install(skills, names, destination)
         return 0
     except (EOFError, KeyboardInterrupt):
-        print("\nInstallation interrupted.", file=sys.stderr)
+        print("\nУстановка прервана.", file=sys.stderr)
         return 130
     except (OSError, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)

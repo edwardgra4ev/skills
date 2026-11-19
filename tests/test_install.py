@@ -18,8 +18,8 @@ class InstallTests(unittest.TestCase):
 
     def run_install(self, *args, input_text=""):
         return subprocess.run(
-            [sys.executable, str(SCRIPT), *map(str, args)],
-            cwd=self.project, capture_output=True, text=True, input=input_text, timeout=10,
+            [sys.executable, "-X", "utf8", str(SCRIPT), *map(str, args)],
+            cwd=self.project, capture_output=True, text=True, encoding="utf-8", input=input_text, timeout=10,
         )
 
     def assert_success(self, result):
@@ -41,7 +41,7 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(source_files, target_files)
         result = self.run_install("--all", "--project", self.project)
         self.assert_success(result)
-        self.assertIn("Already up to date:", result.stdout)
+        self.assertIn("Уже установлен:", result.stdout)
         self.assertEqual(sorted(p.name for p in self.destination.iterdir()), ["feature-trace", "project-todo"])
 
     def test_conflict_prevents_entire_selection_and_preserves_local_changes(self):
@@ -76,7 +76,7 @@ class InstallTests(unittest.TestCase):
         result = self.run_install(input_text=f'1, project-todo, 1\n"{self.project}"\n')
         self.assert_success(result)
         self.assertEqual(sorted(p.name for p in self.destination.iterdir()), ["feature-trace", "project-todo"])
-        self.assertEqual(result.stdout.count("Installed:"), 2)
+        self.assertEqual(result.stdout.count("Установлен:"), 2)
 
     def test_interactive_retries_invalid_selection_and_project(self):
         result = self.run_install(input_text=f'\n0\n1,unknown\n2\n\nmissing\n{self.project}\n')
@@ -89,6 +89,25 @@ class InstallTests(unittest.TestCase):
         result = self.run_install(input_text="all\ntarget project\n")
         self.assert_success(result)
         self.assertEqual(len(list((target / ".agents" / "skills").iterdir())), 2)
+
+    def test_interactive_russian_menu_descriptions_and_commands(self):
+        result = self.run_install(input_text="отмена\n")
+        self.assert_success(result)
+        self.assertIn("Выберите навыки для установки:", result.stdout)
+        # Every bundled skill's description must be visible before selection.
+        visible = " ".join(result.stdout.split())
+        for source in (ROOT / "skills").glob("*/*/SKILL.md"):
+            description = next(line.removeprefix("description: ") for line in
+                               source.read_text(encoding="utf-8").splitlines()
+                               if line.startswith("description: "))
+            self.assertIn(description, visible)
+        self.assertFalse(self.destination.exists())
+        cancelled = self.run_install(input_text="все\nотмена\n")
+        self.assert_success(cancelled)
+        self.assertIn("Путь к проекту:", cancelled.stdout)
+        self.assertFalse(self.destination.exists())
+        self.assert_success(self.run_install(input_text=f"все\n{self.project}\n"))
+        self.assertEqual(len(list(self.destination.iterdir())), 2)
 
     def test_interactive_cancel_and_eof_leave_project_untouched(self):
         for answers, code in [("q\n", 0), ("all\nq\n", 0), ("", 130), ("all\n", 130)]:
