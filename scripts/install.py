@@ -3,6 +3,7 @@
 
 import argparse
 import hashlib
+import re
 import shutil
 import sys
 import tempfile
@@ -78,9 +79,60 @@ def install(skills, names, destination):
         print(f"Already up to date: {target}")
 
 
+def choose_interactively(skills):
+    names = sorted(skills)
+    print("Select skills to install:")
+    for number, name in enumerate(names, start=1):
+        print(f"  {number}. {name}")
+    print("Enter numbers or names separated by spaces/commas, 'all', or 'q' to cancel.")
+    while True:
+        answer = input("Skills: ").strip()
+        if answer.lower() == "q":
+            return None
+        if answer.lower() == "all":
+            selected = names
+            break
+        tokens = re.split(r"[\s,]+", answer) if answer else []
+        selected = []
+        for token in tokens:
+            if token.isascii() and token.isdigit() and 1 <= int(token) <= len(names):
+                selected.append(names[int(token) - 1])
+            elif token in skills:
+                selected.append(token)
+            else:
+                break
+        else:
+            if selected:
+                selected = list(dict.fromkeys(selected))
+                break
+        print("Choose at least one valid skill, 'all', or 'q'.")
+
+    print(f"Selected: {', '.join(selected)}")
+    print("Enter an existing project directory (or 'q' to cancel).")
+    print(f"Relative paths start from: {Path.cwd()}")
+    while True:
+        answer = input("Project: ").strip()
+        if answer.lower() == "q":
+            return None
+        if len(answer) >= 2 and answer[0] == answer[-1] and answer[0] in "\"'":
+            answer = answer[1:-1]
+        if answer:
+            try:
+                project = Path(answer).expanduser().resolve()
+                if project.is_dir():
+                    return selected, project
+            except (OSError, ValueError, RuntimeError):
+                pass
+        print("Project directory does not exist. Enter an existing directory.")
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    selection = parser.add_mutually_exclusive_group(required=True)
+    argv = list(sys.argv[1:] if argv is None else argv)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog="Run without arguments to choose skills and a project interactively.",
+    )
+    selection = parser.add_mutually_exclusive_group(required=bool(argv))
     selection.add_argument("--list", action="store_true", help="List bundled skill names")
     selection.add_argument("--all", action="store_true", help="Install all bundled skills")
     selection.add_argument("--skill", action="append", metavar="NAME", help="Install a skill; repeat to select several")
@@ -91,6 +143,12 @@ def main(argv=None):
 
     try:
         skills = discover()
+        if not argv:
+            choice = choose_interactively(skills)
+            if choice is None:
+                print("Installation cancelled.")
+                return 0
+            args.skill, args.project = choice
         if args.list:
             if args.project or args.dest:
                 parser.error("--list does not take --project or --dest")
@@ -117,6 +175,9 @@ def main(argv=None):
             raise ValueError("Choose a destination outside the source skills directory.")
         install(skills, names, destination)
         return 0
+    except (EOFError, KeyboardInterrupt):
+        print("\nInstallation interrupted.", file=sys.stderr)
+        return 130
     except (OSError, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1

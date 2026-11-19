@@ -16,10 +16,10 @@ class InstallTests(unittest.TestCase):
         self.project = Path(self.tmp.name)
         self.destination = self.project / ".agents" / "skills"
 
-    def run_install(self, *args):
+    def run_install(self, *args, input_text=""):
         return subprocess.run(
             [sys.executable, str(SCRIPT), *map(str, args)],
-            cwd=self.project, capture_output=True, text=True,
+            cwd=self.project, capture_output=True, text=True, input=input_text, timeout=10,
         )
 
     def assert_success(self, result):
@@ -71,6 +71,41 @@ class InstallTests(unittest.TestCase):
             with self.subTest(args=args):
                 self.assertNotEqual(self.run_install(*args).returncode, 0)
         self.assertFalse(self.destination.exists())
+
+    def test_interactive_selects_multiple_skills_and_quoted_project(self):
+        result = self.run_install(input_text=f'1, project-todo, 1\n"{self.project}"\n')
+        self.assert_success(result)
+        self.assertEqual(sorted(p.name for p in self.destination.iterdir()), ["feature-trace", "project-todo"])
+        self.assertEqual(result.stdout.count("Installed:"), 2)
+
+    def test_interactive_retries_invalid_selection_and_project(self):
+        result = self.run_install(input_text=f'\n0\n1,unknown\n2\n\nmissing\n{self.project}\n')
+        self.assert_success(result)
+        self.assertEqual([p.name for p in self.destination.iterdir()], ["project-todo"])
+
+    def test_interactive_all_with_relative_project(self):
+        target = self.project / "target project"
+        target.mkdir()
+        result = self.run_install(input_text="all\ntarget project\n")
+        self.assert_success(result)
+        self.assertEqual(len(list((target / ".agents" / "skills").iterdir())), 2)
+
+    def test_interactive_cancel_and_eof_leave_project_untouched(self):
+        for answers, code in [("q\n", 0), ("all\nq\n", 0), ("", 130), ("all\n", 130)]:
+            with self.subTest(answers=answers):
+                result = self.run_install(input_text=answers)
+                self.assertEqual(result.returncode, code, result.stderr)
+                self.assertFalse(self.destination.exists())
+
+    def test_interactive_conflict_preserves_existing_skill(self):
+        existing = self.destination / "project-todo"
+        existing.mkdir(parents=True)
+        local = existing / "SKILL.md"
+        local.write_text("local modifications", encoding="utf-8")
+        result = self.run_install(input_text=f"all\n{self.project}\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(local.read_text(encoding="utf-8"), "local modifications")
+        self.assertFalse((self.destination / "feature-trace").exists())
 
 
 if __name__ == "__main__":
