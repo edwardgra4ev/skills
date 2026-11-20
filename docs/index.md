@@ -9,6 +9,10 @@
 
 На странице каждого навыка описаны его поведение, зависимости и примеры запросов.
 
+## Экспериментальные навыки
+
+[22 навыка IBM BAW](baw/index.md) — тестовые и непроверенные. Исключены из обычного меню, `--list` и `--all`; установка только с `--include-experimental`.
+
 ## Установка
 
 Используйте [инструкцию установки](installation.md): в ней есть команды
@@ -19,6 +23,8 @@
 
 ```text
 skills/
+  baw-authoring/           # 14 навыков разработки и анализа BAW
+  baw-operations/          # 8 навыков администрирования BAW
   engineering/feature-trace/
     SKILL.md
   productivity/project-todo/
@@ -26,6 +32,7 @@ skills/
     references/workflow.md
     agents/openai.yaml
 docs/
+  baw/                    # каталог, подключение и страницы навыков BAW
   index.md
   installation.md
   feature-trace.md

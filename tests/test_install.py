@@ -12,6 +12,9 @@ SCRIPT = ROOT / "scripts" / "install.py"
 SPEC = importlib.util.spec_from_file_location("installer", SCRIPT)
 installer = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(installer)
+SKILL_NAMES = ["feature-trace", "project-todo"]
+FEATURE_NUMBER = SKILL_NAMES.index("feature-trace") + 1
+TODO_NUMBER = SKILL_NAMES.index("project-todo") + 1
 
 
 class InstallTests(unittest.TestCase):
@@ -24,7 +27,7 @@ class InstallTests(unittest.TestCase):
     def run_install(self, *args, input_text=""):
         return subprocess.run(
             [sys.executable, "-X", "utf8", str(SCRIPT), *map(str, args)],
-            cwd=self.project, capture_output=True, text=True, encoding="utf-8", input=input_text, timeout=10,
+            cwd=self.project, capture_output=True, text=True, encoding="utf-8", input=input_text, timeout=60,
         )
 
     def assert_success(self, result):
@@ -37,9 +40,39 @@ class InstallTests(unittest.TestCase):
         self.assertIn("project-todo", result.stdout)
         self.assertFalse(self.destination.exists())
 
+    def test_experimental_skills_require_explicit_opt_in(self):
+        for result in (self.run_install("--list"), self.run_install(input_text="отмена\n")):
+            self.assert_success(result)
+            self.assertNotIn("baw-project-doc", result.stdout)
+        result = self.run_install("--skill", "baw-project-doc", "--project", self.project)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.destination.exists())
+        result = self.run_install("--include-experimental", "--list")
+        self.assert_success(result)
+        self.assertIn("baw-project-doc", result.stdout)
+        self.assertIn("непроверенные", result.stdout)
+        self.assert_success(self.run_install("--include-experimental", "--skill", "baw-project-doc", "--project", self.project))
+        self.assertEqual([p.name for p in self.destination.iterdir()], ["baw-project-doc"])
+
+    def test_experimental_all_copies_complete_packages(self):
+        self.assert_success(self.run_install("--include-experimental", "--all", "--project", self.project))
+        sources = installer.discover(include_experimental=True)
+        self.assertEqual(len(sources), 24)
+        self.assertEqual(sorted(p.name for p in self.destination.iterdir()), sorted(sources))
+        for name, source in sources.items():
+            self.assertEqual(installer.manifest(source), installer.manifest(self.destination / name))
+
+    def test_default_update_leaves_installed_experimental_skill_untouched(self):
+        existing = self.destination / "baw-project-doc"
+        existing.mkdir(parents=True)
+        local = existing / "SKILL.md"
+        local.write_text("local experimental version", encoding="utf-8")
+        self.assert_success(self.run_install("--all", "--update", "--project", self.project))
+        self.assertEqual(local.read_text(encoding="utf-8"), "local experimental version")
+
     def test_install_all_copies_complete_packages_and_is_repeatable(self):
         self.assert_success(self.run_install("--all", "--project", self.project))
-        for source in (ROOT / "skills").glob("*/*"):
+        for source in installer.discover().values():
             target = self.destination / source.name
             source_files = {p.relative_to(source): p.read_bytes() for p in source.rglob("*") if p.is_file()}
             target_files = {p.relative_to(target): p.read_bytes() for p in target.rglob("*") if p.is_file()}
@@ -47,7 +80,7 @@ class InstallTests(unittest.TestCase):
         result = self.run_install("--all", "--project", self.project)
         self.assert_success(result)
         self.assertIn("Уже установлен:", result.stdout)
-        self.assertEqual(sorted(p.name for p in self.destination.iterdir()), ["feature-trace", "project-todo"])
+        self.assertEqual(sorted(p.name for p in self.destination.iterdir()), SKILL_NAMES)
 
     def test_conflict_prevents_entire_selection_and_preserves_local_changes(self):
         existing = self.destination / "project-todo"
@@ -78,13 +111,13 @@ class InstallTests(unittest.TestCase):
         self.assertFalse(self.destination.exists())
 
     def test_interactive_selects_multiple_skills_and_quoted_project(self):
-        result = self.run_install(input_text=f'1, project-todo, 1\n"{self.project}"\n')
+        result = self.run_install(input_text=f'{FEATURE_NUMBER}, project-todo, {FEATURE_NUMBER}\n"{self.project}"\n')
         self.assert_success(result)
         self.assertEqual(sorted(p.name for p in self.destination.iterdir()), ["feature-trace", "project-todo"])
         self.assertEqual(result.stdout.count("Установлен:"), 2)
 
     def test_interactive_retries_invalid_selection_and_project(self):
-        result = self.run_install(input_text=f'\n0\n1,unknown\n2\n\nmissing\n{self.project}\n')
+        result = self.run_install(input_text=f'\n0\n1,unknown\n{TODO_NUMBER}\n\nmissing\n{self.project}\n')
         self.assert_success(result)
         self.assertEqual([p.name for p in self.destination.iterdir()], ["project-todo"])
 
@@ -93,7 +126,7 @@ class InstallTests(unittest.TestCase):
         target.mkdir()
         result = self.run_install(input_text="all\ntarget project\n")
         self.assert_success(result)
-        self.assertEqual(len(list((target / ".agents" / "skills").iterdir())), 2)
+        self.assertEqual(len(list((target / ".agents" / "skills").iterdir())), len(SKILL_NAMES))
 
     def test_interactive_russian_menu_descriptions_and_commands(self):
         result = self.run_install(input_text="отмена\n")
@@ -101,7 +134,8 @@ class InstallTests(unittest.TestCase):
         self.assertIn("Выберите навыки для установки:", result.stdout)
         # Every bundled skill's description must be visible before selection.
         visible = " ".join(result.stdout.split())
-        for source in (ROOT / "skills").glob("*/*/SKILL.md"):
+        for folder in installer.discover().values():
+            source = folder / "SKILL.md"
             description = next(line.removeprefix("description: ") for line in
                                source.read_text(encoding="utf-8").splitlines()
                                if line.startswith("description: "))
@@ -112,7 +146,7 @@ class InstallTests(unittest.TestCase):
         self.assertIn("Путь к проекту:", cancelled.stdout)
         self.assertFalse(self.destination.exists())
         self.assert_success(self.run_install(input_text=f"все\n{self.project}\n"))
-        self.assertEqual(len(list(self.destination.iterdir())), 2)
+        self.assertEqual(len(list(self.destination.iterdir())), len(SKILL_NAMES))
 
     def test_interactive_cancel_and_eof_leave_project_untouched(self):
         for answers, code in [("q\n", 0), ("all\nq\n", 0), ("", 130), ("all\n", 130)]:

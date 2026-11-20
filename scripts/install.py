@@ -15,9 +15,11 @@ from pathlib import Path
 SKILLS_ROOT = Path(__file__).resolve().parent.parent / "skills"
 
 
-def discover():
+def discover(*, include_experimental=False):
     skills = {}
     for entry in sorted(SKILLS_ROOT.glob("*/*/SKILL.md")):
+        if entry.parent.parent.name in {"baw-authoring", "baw-operations"} and not include_experimental:
+            continue
         name = entry.parent.name
         if name in skills:
             raise ValueError(f"Duplicate skill name: {name}")
@@ -178,7 +180,7 @@ def choose_interactively(skills):
     print("Выберите навыки для установки:")
     for number, name in enumerate(names, start=1):
         print(f"  {number}. {name}")
-        print(textwrap.fill(skill_description(skills[name]), width=88,
+        print(textwrap.fill(skill_description(skills[name]), width=88, break_on_hyphens=False,
                             initial_indent="     ", subsequent_indent="     "))
     print("Введите номера или имена через пробелы или запятые.")
     print("'все' (all) — установить весь набор; 'отмена' (q) — выйти.")
@@ -237,10 +239,14 @@ def main(argv=None):
     target.add_argument("--project", type=Path, help="Existing project; installs into .agents/skills")
     target.add_argument("--dest", type=Path, help="Explicit skills directory for another agent environment")
     parser.add_argument("--update", action="store_true", help="Заменить отличающиеся навыки с резервной копией без вопросов")
+    parser.add_argument("--include-experimental", action="store_true",
+                        help="Включить тестовые, непроверенные навыки BAW в список и выбор установки")
     args = parser.parse_args(argv)
 
     try:
-        skills = discover()
+        skills = discover(include_experimental=args.include_experimental)
+        if args.include_experimental:
+            print("Внимание: навыки BAW тестовые и непроверенные; результаты требуют сверки с исходниками.")
         if not argv:
             choice = choose_interactively(skills)
             if choice is None:
@@ -258,6 +264,12 @@ def main(argv=None):
         names = sorted(skills) if args.all else list(dict.fromkeys(args.skill))
         unknown = sorted(set(names) - skills.keys())
         if unknown:
+            experimental = set(unknown) & discover(include_experimental=True).keys()
+            if experimental:
+                raise ValueError(
+                    f"Тестовые, непроверенные навыки: {', '.join(sorted(experimental))}. "
+                    "Для их установки укажите --include-experimental."
+                )
             raise ValueError(f"Unknown skills: {', '.join(unknown)}. Use --list.")
         if args.project is not None:
             project = args.project.expanduser().resolve()

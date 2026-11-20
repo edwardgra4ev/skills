@@ -60,6 +60,19 @@ python scripts/install.py --skill feature-trace --skill project-todo --project "
 python scripts/install.py --all --project "C:/work/my-project"
 ```
 
+`--all`, обычное меню и `--list` включают только основной набор: `feature-trace` и `project-todo`.
+Тестовые, непроверенные [навыки IBM BAW](baw/index.md) исключены из основной установки.
+Даже явный `--skill` для BAW требует флага `--include-experimental`:
+
+```sh
+python scripts/install.py --include-experimental --list
+python scripts/install.py --include-experimental --skill baw-project-doc --project "C:/work/baw-test"
+```
+
+Сочетание `--include-experimental --all` устанавливает основной и экспериментальный наборы.
+Флаг поддерживается в режиме с параметрами. Агенту также нужно явно поручить установку тестовых BAW-навыков.
+Уже установленные BAW-навыки не удаляются; обычный `--all --update` их не обновляет.
+
 Замените путь на каталог своего проекта, например `/home/user/my-project`
 в Linux или `/Users/user/my-project` в macOS. Скрипт копирует каждый выбранный
 навык целиком в `<проект>/.agents/skills/<имя>/`, включая `references/` и

@@ -1,0 +1,11 @@
+Derived from IBM Business Automation Workflow Skills and Bob Modes
+https://github.com/ibmbpm/ibm-baw-skills-and-bob-modes
+Upstream revision: f8af103a9f1fb1074921ddf1e5d6b6d52f9ed5cb
+License: Apache-2.0 (see LICENSE).
+Original authors and notices remain in the bundled files.
+
+Modified for Codex on 2026-11-19: rewritten skill entrypoint and description;
+portable tool and path instructions; revised credential/TLS handling and
+capability/authorization boundaries; human-facing documentation relocated.
+Detailed workflow and references are adapted upstream material.
+Local validation does not certify compatibility with a live BAW installation.
